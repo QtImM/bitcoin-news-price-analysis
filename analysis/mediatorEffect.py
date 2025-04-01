@@ -1,199 +1,143 @@
-# 中介效应分析
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from statsmodels.stats.mediation import Mediation
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+from scipy.stats import t
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 def mediation_analysis(merged_data):
     """
-    进行中介效应分析并生成可视化结果
-    
-    Parameters:
-    -----------
-    merged_data : DataFrame
-        包含自变量、中介变量和因变量的数据
-        
-    Returns:
-    --------
-    MediationResults
-        中介效应分析的结果对象
+    进行中介效应分析
+    X: news_count (新闻数量)
+    M: sentiment_avg (情感得分)
+    Y: price_change (价格变化率)
     """
     print("执行中介效应分析...")
     
-    # 删除缺失值
-    data = merged_data.dropna(subset=['event_policy', 'sentiment_avg', 'volatility_7d'])
-    
-    # 定义变量
-    X = data['event_policy']     # 自变量
-    M = data['sentiment_avg']    # 中介变量
-    Y = data['volatility_7d']    # 因变量
+    # 准备数据
+    data = merged_data.copy()
+    data['price_change'] = data['price'].pct_change()  # 计算价格变化率
+    data = data.dropna(subset=['news_count', 'sentiment_avg', 'price_change'])  # 删除缺失值
     
     try:
-        # 三阶段回归模型
-        med_model = Mediation(
-            Y,                   # 因变量
-            X,                   # 自变量
-            M,                   # 中介变量
-            boot=True,           # 使用bootstrap进行推断
-            seed=42,             # 随机数种子
-            boot_iterations=5000 # 增加迭代次数提高稳定性
-        )
-        result = med_model.fit()
+        # 标准化变量
+        for col in ['news_count', 'sentiment_avg', 'price_change']:
+            data[f'{col}_std'] = (data[col] - data[col].mean()) / data[col].std()
         
-        # 提取关键结果
-        total_effect = result.total_effect
-        direct_effect = result.direct_effect
-        indirect_effect = result.indirect_effect
+        # 路径 a: X -> M
+        model_m = ols('sentiment_avg_std ~ news_count_std', data=data).fit()
+        a = model_m.params['news_count_std']
+        p_a = model_m.pvalues['news_count_std']
         
-        proportion_mediated = indirect_effect / total_effect if total_effect != 0 else 0
+        # 路径 b: M -> Y
+        model_y = ols('price_change_std ~ news_count_std + sentiment_avg_std', data=data).fit()
+        b = model_y.params['sentiment_avg_std']
+        p_b = model_y.pvalues['sentiment_avg_std']
         
-        # 创建可视化结果
+        # 路径 c: X -> Y (总效应)
+        model_c = ols('price_change_std ~ news_count_std', data=data).fit()
+        c = model_c.params['news_count_std']
+        p_c = model_c.pvalues['news_count_std']
+        
+        # 直接效应 (c')
+        direct_effect = model_y.params['news_count_std']
+        p_direct = model_y.pvalues['news_count_std']
+        
+        # 间接效应 (a * b)
+        indirect_effect = a * b
+        
+        # 总效应 (c)
+        total_effect = c
+        
+        # 判断显著性
+        def is_significant(p_value):
+            return p_value < 0.05
+        
+        # 输出结果
+        print("中介效应分析结果:")
+        print(f"直接效应 (c'): {direct_effect:.4f} (p={p_direct:.4f}, {'显著' if is_significant(p_direct) else '不显著'})")
+        print(f"间接效应 (a*b): {indirect_effect:.4f} (p_a={p_a:.4f}, {'显著' if is_significant(p_a) else '不显著'}; "
+              f"p_b={p_b:.4f}, {'显著' if is_significant(p_b) else '不显著'})")
+        print(f"总效应 (c): {total_effect:.4f} (p={p_c:.4f}, {'显著' if is_significant(p_c) else '不显著'})")
+        
+        # 判断中介效应是否显著
+        if is_significant(p_a) and is_significant(p_b):
+            print("中介效应显著！")
+        else:
+            print("中介效应不显著。")
+        
+        # 可视化
         plt.figure(figsize=(12, 8))
         
-        # 1. 中介路径图
+        # 路径图
         plt.subplot(2, 2, 1)
-        # 创建简单的路径图
-        plt.plot([0, 1], [0.3, 0.3], 'k-', linewidth=2)  # X->Y路径
-        plt.plot([0, 0.5, 1], [0.3, 0.6, 0.3], 'b--', linewidth=2)  # X->M->Y路径
+        plt.title("中介效应路径图", fontsize=16)
         
-        # 添加节点
-        plt.scatter([0, 0.5, 1], [0.3, 0.6, 0.3], s=800, c=['lightblue', 'lightgreen', 'lightblue'], 
-                    edgecolors='black', zorder=5)
+         # 绘制节点和箭头
+        plt.annotate('', xy=(0.3, 0.5), xytext=(0.1, 0.5),
+                    arrowprops=dict(arrowstyle="->", color='red'))
+        plt.annotate('', xy=(0.7, 0.5), xytext=(0.5, 0.5),
+                    arrowprops=dict(arrowstyle="->", color='blue'))
+        plt.annotate('', xy=(0.7, 0.3), xytext=(0.1, 0.3),
+                    arrowprops=dict(arrowstyle="->", color='green'))
         
         # 添加标签
-        plt.text(0, 0.3, "政策事件\n(X)", ha='center', va='center', fontsize=12)
-        plt.text(0.5, 0.6, "市场情感\n(M)", ha='center', va='center', fontsize=12)
-        plt.text(1, 0.3, "波动率\n(Y)", ha='center', va='center', fontsize=12)
+        plt.text(0.1, 0.3, '新闻数量', ha='center', bbox=dict(facecolor='white'))
+        plt.text(0.5, 0.5, '情感得分', ha='center', bbox=dict(facecolor='white'))
+        plt.text(0.7, 0.3, '价格变化', ha='center', bbox=dict(facecolor='white'))
         
-        # 添加路径系数
-        a_effect = result.a_coeff
-        b_effect = result.b_coeff
-        c_effect = result.c_coeff
+        # 添加系数
+        plt.text(0.2, 0.55, f'a={a:.3f} ({p_a:.3f})', color='red' if is_significant(p_a) else 'black')
+        plt.text(0.6, 0.55, f'b={b:.3f} ({p_b:.3f})', color='blue' if is_significant(p_b) else 'black')
+        plt.text(0.4, 0.45, f"c'={direct_effect:.3f} ({p_direct:.3f})", color='green' if is_significant(p_direct) else 'black')
         
-        plt.text(0.25, 0.5, f"a={a_effect:.3f}", ha='center', va='center', fontsize=10)
-        plt.text(0.75, 0.5, f"b={b_effect:.3f}", ha='center', va='center', fontsize=10)
-        plt.text(0.5, 0.2, f"c'={direct_effect:.3f}", ha='center', va='center', fontsize=10)
-        
-        plt.title("中介效应路径示意图")
         plt.axis('off')
         
-        # 2. 直接效应、间接效应和总效应条形图
+        # 散点图
         plt.subplot(2, 2, 2)
-        effects = [direct_effect, indirect_effect, total_effect]
-        effect_names = ["直接效应", "间接效应", "总效应"]
-        colors = ['#3498db', '#e74c3c', '#2ecc71']
+        sns.regplot(x='news_count_std', y='sentiment_avg_std', data=data, scatter_kws={'alpha':0.5}, line_kws={'color':'red'})
+        plt.title('新闻数量 -> 情感得分', fontsize=14)
         
-        bars = plt.bar(effect_names, effects, color=colors, alpha=0.7)
-        
-        # 添加效应值标签
-        for bar, effect in zip(bars, effects):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.02 if height > 0 else height - 0.08,
-                    f'{effect:.3f}', ha='center', va='bottom' if height > 0 else 'top')
-        
-        plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
-        plt.title("中介效应分解")
-        plt.ylabel("效应大小")
-        plt.grid(axis='y', alpha=0.3)
-        
-        # 3. 中介效应比例饼图
         plt.subplot(2, 2, 3)
-        if total_effect != 0:  # 避免总效应为0导致的除零错误
-            sizes = [abs(direct_effect/total_effect), abs(indirect_effect/total_effect)]
-            labels = [f'直接效应\n{abs(direct_effect/total_effect)*100:.1f}%', 
-                     f'间接效应\n{abs(indirect_effect/total_effect)*100:.1f}%']
-            plt.pie(sizes, labels=labels, colors=['#3498db', '#e74c3c'],
-                   autopct='%1.1f%%', startangle=90, explode=(0, 0.1))
-            plt.title("中介效应比例")
-        else:
-            plt.text(0.5, 0.5, "总效应为零，无法计算比例", ha='center', va='center')
-            plt.title("中介效应比例(总效应为零)")
-            plt.axis('off')
+        sns.regplot(x='sentiment_avg_std', y='price_change_std', data=data, scatter_kws={'alpha':0.5}, line_kws={'color':'blue'})
+        plt.title('情感得分 -> 价格变化', fontsize=14)
         
-        # 4. 抽样分布图
         plt.subplot(2, 2, 4)
-        
-        # 如果有bootstrap结果，绘制间接效应的抽样分布
-        if hasattr(result, 'indirect_conf_int'):
-            try:
-                # 提取bootstrap样本
-                boot_samples = result.boot_ind_effects
-                
-                # 绘制直方图和核密度估计
-                sns.histplot(boot_samples, kde=True, color='#e74c3c', alpha=0.6)
-                
-                # 添加置信区间
-                low, high = result.indirect_conf_int
-                plt.axvline(x=low, color='r', linestyle='--', alpha=0.7, label=f'95%置信区间下限: {low:.3f}')
-                plt.axvline(x=high, color='r', linestyle='--', alpha=0.7, label=f'95%置信区间上限: {high:.3f}')
-                plt.axvline(x=indirect_effect, color='k', linestyle='-', label=f'间接效应: {indirect_effect:.3f}')
-                
-                plt.title("间接效应Bootstrap抽样分布")
-                plt.xlabel("间接效应值")
-                plt.ylabel("频率")
-                plt.legend(fontsize=8)
-            except Exception as e:
-                plt.text(0.5, 0.5, f"无法绘制抽样分布: {str(e)}", ha='center', va='center')
-                plt.axis('off')
-        else:
-            plt.text(0.5, 0.5, "未进行Bootstrap抽样", ha='center', va='center')
-            plt.axis('off')
+        sns.regplot(x='news_count_std', y='price_change_std', data=data, scatter_kws={'alpha':0.5}, line_kws={'color':'green'})
+        plt.title('新闻数量 -> 价格变化', fontsize=14)
         
         plt.tight_layout()
-        plt.savefig("analysis/mediation_analysis.png", dpi=300)
-        print("中介效应分析结果已保存为 analysis/mediation_analysis.png")
+        plt.savefig('analysis/mediation_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
         
-        # 额外创建中介效应摘要图
-        plt.figure(figsize=(10, 6))
-        
-        # 设置文本框样式
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        
-        # 创建摘要文本
-        summary_text = (
-            f"中介效应分析摘要:\n\n"
-            f"1. 总效应 (c): {total_effect:.4f}\n"
-            f"2. 直接效应 (c'): {direct_effect:.4f}\n"
-            f"3. 间接效应 (a*b): {indirect_effect:.4f}\n\n"
-            f"4. X→M路径 (a): {a_effect:.4f}\n"
-            f"5. M→Y路径 (b): {b_effect:.4f}\n\n"
-        )
-        
-        if total_effect != 0:
-            summary_text += f"6. 中介比例: {abs(proportion_mediated)*100:.2f}%\n\n"
-        
-        # 添加结论
-        if abs(indirect_effect) > 0.01 and result.indirect_pvalue < 0.05:
-            summary_text += "结论: 存在显著的中介效应。"
-            if direct_effect * indirect_effect > 0:
-                summary_text += "\n这是部分中介效应。"
-            elif abs(direct_effect) < 0.01 or result.direct_pvalue > 0.05:
-                summary_text += "\n这是完全中介效应。"
-            else:
-                summary_text += "\n直接效应和间接效应方向相反，表现为抑制效应。"
-        else:
-            summary_text += "结论: 未发现显著的中介效应。"
-        
-        # 将摘要文本放在图表中央
-        plt.text(0.5, 0.5, summary_text, transform=plt.gca().transAxes,
-                fontsize=14, verticalalignment='center', horizontalalignment='center',
-                bbox=props)
-        
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig("analysis/mediation_summary.png", dpi=300)
-        print("中介效应摘要已保存为 analysis/mediation_summary.png")
-        
-        return result
+        return {
+            'direct_effect': direct_effect,
+            'indirect_effect': indirect_effect,
+            'total_effect': total_effect,
+            'model_m': model_m,
+            'model_y': model_y,
+            'model_c': model_c
+        }
         
     except Exception as e:
-        plt.figure(figsize=(10, 6))
-        plt.text(0.5, 0.5, f"中介效应分析失败: {str(e)}\n\n请检查数据完整性和变量间关系", 
-                 ha='center', va='center', fontsize=14,
-                 bbox=dict(boxstyle='round', facecolor='#ffcccc', alpha=0.6))
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig("analysis/mediation_error.png")
-        print(f"中介效应分析出错: {str(e)}")
+        print(f"分析出错: {str(e)}")
         return None
+
+if __name__ == "__main__":
+    try:
+        # 读取数据
+        df = pd.read_csv("analysis/merged_data.csv", parse_dates=['date'])
+        print(f"成功读取数据，共{len(df)}条记录")
+        
+        # 执行分析
+        result = mediation_analysis(df)
+        
+        if result is not None:
+            print("分析完成！结果已保存到 analysis/mediation_analysis.png")
+    except Exception as e:
+        print(f"程序执行出错: {str(e)}")
