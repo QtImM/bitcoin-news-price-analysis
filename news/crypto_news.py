@@ -3,7 +3,6 @@ import requests
 from datetime import datetime, timedelta
 from textblob import TextBlob
 import time
-import random
 
 def get_cryptopanic_news(start_date, end_date, api_key):
     """
@@ -34,7 +33,7 @@ def get_cryptopanic_news(start_date, end_date, api_key):
                 except requests.exceptions.RequestException as e:
                     if retry == max_retries - 1:  # 最后一次重试
                         print(f"请求失败: {e}")
-                        return pd.DataFrame(news_data)
+                        return pd.DataFrame(columns=['date', 'title', 'event_type', 'sentiment_score', 'source'])
                     time.sleep(2)  # 重试前等待
             
             # 检查是否有结果
@@ -60,15 +59,14 @@ def get_cryptopanic_news(start_date, end_date, api_key):
                     # 事件类型分类
                     event_type = classify_event_type(title.lower())
                     
-                    # 情感分析
-                    sentiment = TextBlob(title).sentiment.polarity
-                    sentiment_score = 'positive' if sentiment > 0 else 'negative' if sentiment < 0 else 'neutral'
+                    # 获取更准确的情感分数
+                    sentiment = get_sentiment_score(title)
                     
                     news_data.append({
                         'date': date.strftime('%Y-%m-%d'),
                         'title': title,
                         'event_type': event_type,
-                        'sentiment_score': sentiment_score,
+                        'sentiment_score': sentiment,
                         'source': article.get('source', {}).get('title', 'Unknown')
                     })
                     
@@ -86,46 +84,12 @@ def get_cryptopanic_news(start_date, end_date, api_key):
             page += 1
             time.sleep(1.5)  # 增加延迟，避免触发API限制
         
-        # 如果API数据不足，生成模拟数据填充缺失日期
-        if news_data:
-            df = pd.DataFrame(news_data)
-            df['date'] = pd.to_datetime(df['date'])
-            
-            # 创建完整日期范围
-            date_range = pd.date_range(start=start_date, end=end_date)
-            existing_dates = set(df['date'].dt.strftime('%Y-%m-%d'))
-            
-            # 检查缺失的日期并填充模拟数据
-            missing_data = []
-            for date in date_range:
-                date_str = date.strftime('%Y-%m-%d')
-                if date_str not in existing_dates:
-                    # 为每个缺失日期生成2-5条模拟新闻
-                    for _ in range(random.randint(2, 5)):
-                        event_type = random.choice(['market', 'policy', 'technology', 'security', 'adoption', 'other'])
-                        sentiment = random.choice(['positive', 'negative', 'neutral'])
-                        missing_data.append({
-                            'date': date_str,
-                            'title': f"Bitcoin {event_type} news on {date_str}",
-                            'event_type': event_type,
-                            'sentiment_score': sentiment,
-                            'source': 'Generated Data'
-                        })
-            
-            # 合并真实数据和模拟数据
-            if missing_data:
-                print(f"为{len(missing_data)}条缺失日期数据生成模拟新闻")
-                missing_df = pd.DataFrame(missing_data)
-                df = pd.concat([df, missing_df], ignore_index=True)
-            
-            return df
-        else:
-            print("未获取到任何数据")
-            return pd.DataFrame()
+        # 直接返回获取到的新闻数据
+        return pd.DataFrame(news_data) if news_data else pd.DataFrame(columns=['date', 'title', 'event_type', 'sentiment_score', 'source'])
             
     except Exception as e:
         print(f"发生未预期的错误: {e}")
-        return pd.DataFrame(news_data)
+        return pd.DataFrame(columns=['date', 'title', 'event_type', 'sentiment_score', 'source'])
 
 def classify_event_type(title):
     """
@@ -142,7 +106,30 @@ def classify_event_type(title):
     for event_type, words in keywords.items():
         if any(word in title for word in words):
             return event_type
-    return 'other'
+    return 'market'  # 默认分类为市场相关
+
+def get_sentiment_score(title):
+    """
+    获取更准确的情感分数
+    """
+    # 基础分数
+    base_score = TextBlob(title).sentiment.polarity
+    
+    # 金融市场特定词典
+    positive_terms = ['bullish', 'surge', 'rally', 'gain', 'breakthrough', 'adopt', 'approve']
+    negative_terms = ['bearish', 'crash', 'decline', 'hack', 'ban', 'risk', 'fraud']
+    
+    # 调整分数
+    title_lower = title.lower()
+    for term in positive_terms:
+        if term in title_lower:
+            base_score += 0.1
+    for term in negative_terms:
+        if term in title_lower:
+            base_score -= 0.1
+            
+    # 确保分数在 -1 到 1 之间
+    return max(min(base_score, 1.0), -1.0)
 
 if __name__ == "__main__":
     try:
@@ -170,7 +157,7 @@ if __name__ == "__main__":
             print("\n事件类型统计:")
             print(df['event_type'].value_counts())
             print("\n情感分布:")
-            print(df['sentiment_score'].value_counts())
+            print(pd.cut(df['sentiment_score'], bins=5).value_counts())
         else:
             print("未能获取任何数据")
             

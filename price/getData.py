@@ -51,7 +51,7 @@ if __name__ == "__main__":
         
         if not df.empty:
             # 保存到CSV文件
-            filename = f'bitcoin_prices_{datetime.now().strftime("%Y%m%d")}.csv'
+            filename = f'price/mixture/bitcoin_prices.csv'
             df.to_csv(filename, index=False)
             
             print(f"\n数据已保存到文件: {filename}")
