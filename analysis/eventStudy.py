@@ -1,140 +1,113 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import ttest_1samp
+import os
+from scipy import stats
 
-# 读取数据
-def load_data(file_path):
-    """加载合并后的数据"""
-    df = pd.read_csv(file_path)
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date').set_index('date')
-    return df
+# ==================== 全局配置 ====================
+EVENT_TYPES = ['negative', 'neutral', 'positive']  # 需分析的事件类型
+EVENT_WINDOW = (-3, 5)     # 事件窗口日
+ESTIMATION_WINDOW = 100    # 估计窗口长度
+SIGNIFICANCE_LEVEL = 0.05  # 显著性水平
+OUTPUT_DIR = 'analysis/event_analysis_results'  # 结果保存目录
 
-# 定义事件分析参数
-EVENT_WINDOW = (-3, 5)  # 事件窗口：事件前3天到事件后5天
-ESTIMATION_WINDOW = (-30, -10)  # 估计窗口：事件前30天到事件前10天
+# ==================== 数据准备 ====================
+df = pd.read_csv("analysis/merged_DetailData.csv", parse_dates=['date'])
+df = df.sort_values('date').drop_duplicates('date', keep='first')
+df['return'] = np.log(df['price'] / df['price'].shift(1))
 
-def event_study(data, event_dates):
-    """
-    执行事件分析
-    :param data: 包含价格和情感分数的数据
-    :param event_dates: 事件日期列表
-    :return: 分析结果 DataFrame
-    """
-    results = []
+# 创建输出目录
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# ==================== 分析函数 ====================
+def analyze_event(event_type):
+    """执行单个事件类型分析"""
+    # 识别事件日期
+    event_dates = df[df[event_type] == 1]['date'].unique()
+    if len(event_dates) == 0:
+        print(f"警告：未找到{event_type}事件日期")
+        return None
+    
+    # 存储结果
+    ar_list = []
+    car_list = []
+    
+    # 逐个事件分析
     for date in event_dates:
         try:
-            idx = data.index.get_loc(date)
-            if isinstance(idx, (np.ndarray, list)):  # 如果 idx 是数组或列表，取第一个匹配的索引
-                idx = idx[0]
-        except KeyError:
+            idx = df.index[df['date'] == date][0]
+            start = idx - ESTIMATION_WINDOW + EVENT_WINDOW[0]
+            end = idx + EVENT_WINDOW[1]
+            window = df.iloc[start:end+1]['return'].values
+            
+            # 计算正常收益率
+            normal_ret = window[:ESTIMATION_WINDOW].mean()
+            
+            # 计算异常收益率
+            ar = window[ESTIMATION_WINDOW:] - normal_ret
+            ar_list.append(ar)
+            car_list.append(ar.sum())
+            
+        except IndexError:
             continue
+    
+    # 结果汇总
+    results = {
+        'event_type': event_type,
+        'event_count': len(ar_list),
+        'mean_ar': np.mean(ar_list, axis=0),
+        'mean_car': np.mean(car_list),
+        't_stat': stats.ttest_1samp(car_list, 0).statistic,
+        'p_value': stats.ttest_1samp(car_list, 0).pvalue
+    }
+    return results
 
-        # 事件窗口检查
-        ew_start = idx + EVENT_WINDOW[0]
-        ew_end = idx + EVENT_WINDOW[1]
-        if ew_start < 0 or ew_end >= len(data):  # 确保 ew_start 和 ew_end 是整数
-            continue
+# ==================== 批量分析 ====================
+all_results = []
+for etype in EVENT_TYPES:
+    result = analyze_event(etype)
+    if result:
+        all_results.append(result)
 
-        # 估计期检查
-        est_start = idx + ESTIMATION_WINDOW[0]
-        est_end = idx + ESTIMATION_WINDOW[1]
-        if est_start < 0 or est_end >= len(data):  # 确保 est_start 和 est_end 是整数
-            continue
+# ==================== 可视化 ====================
+# 创建可视化画布
+plt.figure(figsize=(15, 8))
 
-        # 提取数据
-        event_window = data.iloc[ew_start:ew_end + 1]
-        estimation_window = data.iloc[est_start:est_end + 1]
+# 绘制累计异常收益率
+for i, res in enumerate(all_results):
+    days = range(EVENT_WINDOW[0], EVENT_WINDOW[1]+1)
+    car = res['mean_ar'].cumsum()
+    
+    # 标注显著性
+    sig_marker = '*' if res['p_value'] < SIGNIFICANCE_LEVEL else ''
+    label = f"{res['event_type']}{sig_marker} (n={res['event_count']})"
+    
+    plt.plot(days, car, 
+             marker='o' if sig_marker else 'x',
+             linestyle='--' if sig_marker else ':',
+             label=label)
 
-        # 有效性验证
-        if len(event_window) != (EVENT_WINDOW[1] - EVENT_WINDOW[0] + 1):
-            continue
-        if len(estimation_window) < (ESTIMATION_WINDOW[1] - ESTIMATION_WINDOW[0] + 1):
-            continue
+# 图表装饰
+plt.axvline(0, color='red', linestyle='--', label='事件日')
+plt.axhline(0, color='black', linestyle='-')
+plt.title(f"不同事件类型累计异常收益率对比 (α={SIGNIFICANCE_LEVEL})")
+plt.xlabel("事件窗口日")
+plt.ylabel("累计异常收益率")
+plt.legend()
+plt.grid(True)
 
-        # 计算收益率
-        normal_ret = estimation_window['return'].mean()
-        ar = event_window['return'] - normal_ret
+# 保存可视化结果
+plt.savefig(f'{OUTPUT_DIR}/CAR_comparison.png', dpi=300, bbox_inches='tight')
+plt.close()
 
-        # 存储结果
-        results.append({
-            'event_date': date,
-            'ar': ar.values,
-            'car': ar.sum(),
-            'sentiment_score': data.loc[date, 'sentiment_score']
-        })
+# ==================== 结果保存 ====================
+# 保存统计结果
+result_df = pd.DataFrame(all_results)
+result_df['significance'] = result_df['p_value'].apply(
+    lambda x: '显著' if x < SIGNIFICANCE_LEVEL else '不显著')
+result_df.to_csv(f'{OUTPUT_DIR}/statistical_results.csv', index=False)
 
-    return pd.DataFrame(results)
+# 保存原始数据
+pd.DataFrame(all_results).to_json(f'{OUTPUT_DIR}/raw_data.json')
 
-# 主程序
-if __name__ == "__main__":
-    # 加载数据
-    FILE_PATH = "analysis/merged_DetailData.csv"
-    df = load_data(FILE_PATH)
-
-    # 计算收益率
-    df['return'] = np.log(df['price']) - np.log(df['price'].shift(1))
-
-    # 筛选事件日期（情感分数不为0的日期）
-    event_dates = df[df['sentiment_score'] != 0].index
-
-    # 执行事件分析
-    results = event_study(df, event_dates)
-
-    # 结果矩阵
-    ar_matrix = pd.DataFrame(
-        [x for x in results.ar],
-        columns=[f't{i + EVENT_WINDOW[0]}' for i in range(len(results.ar[0]))]
-    )
-
-    # 可视化分析
-    plt.figure(figsize=(14, 8))
-
-    # 异常收益率分布
-    plt.subplot(2, 2, 1)
-    ar_matrix.mean().plot(kind='bar', color='steelblue')
-    plt.title('Average Abnormal Returns')
-    plt.axhline(0, color='black', linestyle=':')
-
-    # 累计收益率分布
-    plt.subplot(2, 2, 2)
-    ar_matrix.mean().cumsum().plot(color='darkorange')
-    plt.title('Cumulative Abnormal Returns')
-
-    # 按情感分组分析
-    plt.subplot(2, 2, 3)
-    for label, group in results.groupby(pd.cut(results.sentiment_score,
-                                               bins=[-np.inf, -0.1, 0.1, np.inf],
-                                               labels=['负面', '中性', '正面'])):
-        group.ar.apply(pd.Series).mean().plot(label=label)
-    plt.title('Abnormal Returns by Sentiment')
-    plt.legend()
-
-    # CAR分布
-    plt.subplot(2, 2, 4)
-    plt.hist(results.car, bins=30, color='green', alpha=0.7)
-    plt.title('CAR Distribution')
-    plt.axvline(results.car.mean(), color='red')
-
-    plt.tight_layout()
-    plt.show()
-
-    # 统计输出
-    print(f'''
-综合分析结果（基于{len(results)}个有效事件）：
-============================================
-1. 整体市场反应：
-   - 平均CAR: {results.car.mean():.4f} (p={ttest_1samp(results.car, 0)[1]:.3f})
-   - 正向反应比例: {len(results[results.car > 0]) / len(results):.1%}
-
-2. 情感分化效应：
-   - 正面事件平均CAR: {results[results.sentiment_score > 0.1].car.mean():.4f}
-   - 负面事件平均CAR: {results[results.sentiment_score < -0.1].car.mean():.4f}
-   - 中性事件平均CAR: {results[(results.sentiment_score >= -0.1) & (results.sentiment_score <= 0.1)].car.mean():.4f}
-
-3. 时效性分析：
-   - 最大反应日: {ar_matrix.mean().abs().idxmax()}
-   - 持续效应天数: {np.where(ar_matrix.mean().cumsum() == ar_matrix.mean().cumsum().max())[0][0] - 3}天
-''')
+print(f"分析完成！结果已保存至 {OUTPUT_DIR} 目录")

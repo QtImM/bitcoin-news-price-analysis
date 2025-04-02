@@ -52,7 +52,7 @@ def load_and_clean_data(price_path, news_path):
 
 def merge_datasets(price_df, news_df):
     """
-    合并数据集，保留 date, price, sentiment_score, title 和情感指标
+    合并数据集，保留 date, price, change_percent, sentiment_score, title 和情感指标
     """
     if price_df is None or news_df is None:
         print("价格数据或新闻数据为空，无法合并")
@@ -68,9 +68,10 @@ def merge_datasets(price_df, news_df):
         
         # 填充缺失值
         merged['price'] = merged['price'].fillna(method='ffill')
+        merged['change_percent'] = merged['change_percent'].fillna(0)  # 填充 change_percent
         
         # 只保留需要的列
-        columns_to_keep = ['date', 'price', 'sentiment_score', 'title', 'negative', 'neutral', 'positive']
+        columns_to_keep = ['date', 'price', 'change_percent', 'sentiment_score', 'title', 'negative', 'neutral', 'positive']
         merged = merged[columns_to_keep]
         
         return merged

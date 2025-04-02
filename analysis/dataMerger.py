@@ -51,7 +51,7 @@ def load_and_clean_data(price_path, news_path):
 
 def merge_datasets(price_df, news_df):
     """
-    合并数据集，处理缺失数据,不包含event相关列
+    合并数据集，处理缺失数据，并保留 change_percent 列
     """
     if price_df is None or news_df is None:
         print("价格数据或新闻数据为空，无法合并")
@@ -72,6 +72,7 @@ def merge_datasets(price_df, news_df):
         price_filled = price_df.set_index('date').reindex(date_range).reset_index()
         price_filled = price_filled.rename(columns={'index': 'date'})
         price_filled['price'] = price_filled['price'].ffill().bfill()
+        price_filled['change_percent'] = price_filled['change_percent'].ffill().bfill()  # 填充 change_percent
         
         # 按日聚合新闻数据,只保留需要的列
         news_agg = news_df.groupby('date').agg({
@@ -89,68 +90,8 @@ def merge_datasets(price_df, news_df):
         merged['sentiment_avg'] = merged['sentiment_avg'].fillna(0)
         
         # 只保留需要的列
-        columns_to_keep = ['date', 'price', 'news_count', 'sentiment_avg']
+        columns_to_keep = ['date', 'price', 'change_percent', 'news_count', 'sentiment_avg']
         merged = merged[columns_to_keep]
-        
-        return merged
-        
-    except Exception as e:
-        print(f"合并数据时出错: {e}")
-        return None
-    """
-    合并数据集，处理缺失数据
-    """
-    if price_df is None or news_df is None:
-        print("价格数据或新闻数据为空，无法合并")
-        return None
-    
-    try:
-        # 确保日期格式统一
-        price_df['date'] = pd.to_datetime(price_df['date']).dt.normalize()
-        news_df['date'] = pd.to_datetime(news_df['date']).dt.normalize()
-        
-        # 创建完整的日期范围
-        date_range = pd.date_range(
-            start=min(price_df['date'].min(), news_df['date'].min()),
-            end=max(price_df['date'].max(), news_df['date'].max())
-        )
-        
-        # 填充价格数据
-        price_filled = price_df.set_index('date').reindex(date_range).reset_index()
-        price_filled = price_filled.rename(columns={'index': 'date'})
-        price_filled['price'] = price_filled['price'].ffill().bfill()  # 前向和后向填充
-        
-        # 按日聚合新闻数据
-        news_agg = news_df.groupby('date').agg({
-            'title': 'count',
-            'event_type': lambda x: list(x),
-            'sentiment_score': 'mean',
-            'source': lambda x: list(x)
-        }).reset_index()
-        
-        news_agg.columns = ['date', 'news_count', 'event_types', 'sentiment_avg', 'sources']
-        
-        # 生成事件类型指标
-        event_types = ['market', 'policy', 'technology', 'security', 'adoption']
-        for event in event_types:
-            news_agg[f'event_{event}'] = news_agg['event_types'].apply(
-                lambda x: 1 if isinstance(x, list) and any(e.lower() == event for e in x) else 0
-            )
-        
-        # 合并数据
-        merged = pd.merge(price_filled, news_agg, on='date', how='left')
-        
-        # 填充缺失值
-        merged['news_count'] = merged['news_count'].fillna(0)
-        merged['sentiment_avg'] = merged['sentiment_avg'].fillna(0)
-        
-        # 填充事件类型列
-        event_cols = [col for col in merged.columns if col.startswith('event_')]
-        merged[event_cols] = merged[event_cols].fillna(0)
-        
-        # 删除不需要的列
-        columns_to_drop = ['event_types', 'sources']
-        merged = merged.drop(columns=[col for col in columns_to_drop if col in merged.columns])
         
         return merged
         
@@ -161,9 +102,9 @@ def merge_datasets(price_df, news_df):
 if __name__ == "__main__":
     try:
         # 参数配置
-        PRICE_PATH = "price\mixture\cmc10_weighted_index.csv"
-        NEWS_PATH = "news\cryptonewsResearch.csv"
-        OUTPUT_PATH = "analysis/merged_data.csv"
+        PRICE_PATH = "price\\mixture\\cmc10_weighted_index.csv"
+        NEWS_PATH = "news\\cryptonewsResearch.csv"
+        OUTPUT_PATH = "analysis\\merged_data.csv"
         
         # 执行流程
         print("开始加载数据...")
@@ -180,8 +121,6 @@ if __name__ == "__main__":
                 print(f"数据形状: {merged_data.shape}")
                 print("\n数据预览:")
                 print(merged_data.head())
-                print("\n数据统计:")
-                print(merged_data.describe())
             else:
                 print("数据合并失败")
         else:
