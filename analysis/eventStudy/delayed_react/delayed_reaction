@@ -1,0 +1,113 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from datetime import timedelta
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+# 读取数据
+price_df = pd.read_csv('analysis/eventStudy/snews/news_filtered.csv')
+event_df = pd.read_csv('analysis/eventStudy/snews/significant_filtered.csv')
+
+# 转换日期格式
+price_df['date'] = pd.to_datetime(price_df['date'])
+event_df['date'] = pd.to_datetime(event_df['date'])
+
+# 计算每个事件后1-3天的价格变化
+def calculate_delayed_returns(price_df, event_df):
+    # 按日期排序并去除重复日期
+    price_df = price_df.sort_values('date').drop_duplicates(subset=['date'], keep='first')
+    event_df = event_df.sort_values('date').drop_duplicates(subset=['date'], keep='first')
+    
+    # 创建价格时间序列
+    price_series = pd.Series(price_df['price'].values, index=price_df['date'])
+    
+    delayed_returns = []
+    for idx, row in event_df.iterrows():
+        event_date = row['date']
+        if event_date not in price_series.index:
+            continue
+            
+        event_price = price_series[event_date]
+        
+        # 计算后续3天的收益率
+        returns = {}
+        for day in range(1, 4):
+            next_date = event_date + timedelta(days=day)
+            if next_date in price_series.index:
+                next_price = price_series[next_date]
+                ret = (next_price - event_price) / event_price * 100
+                returns[f'day_{day}_return'] = ret
+            else:
+                returns[f'day_{day}_return'] = None
+                
+        # 确定价格变化方向
+        price_direction = '上涨' if row['change_percent'] > 0 else '下跌' if row['change_percent'] < 0 else '持平'
+        category_direction = f"{row['category']}+{price_direction}"
+                
+        delayed_returns.append({
+            'date': event_date,
+            'category': row['category'],
+            'price_direction': price_direction,
+            'category_direction': category_direction,
+            'sentiment_score': row['sentiment_score'],
+            'initial_change': row['change_percent'],
+            **returns
+        })
+    
+    return pd.DataFrame(delayed_returns)
+
+# 计算延迟收益
+delayed_df = calculate_delayed_returns(price_df, event_df)
+
+# 分析不同类别和价格方向的组合效应
+categories = delayed_df['category_direction'].unique()
+days = ['initial_change', 'day_1_return', 'day_2_return', 'day_3_return']
+
+plt.figure(figsize=(15, 8))
+for cat in categories:
+    cat_data = delayed_df[delayed_df['category_direction'] == cat]
+    means = [cat_data[day].mean() for day in days]
+    plt.plot(range(len(days)), means, marker='o', label=cat)
+
+plt.title('不同类别和价格方向组合的延迟价格反应')
+plt.xlabel('事件后天数')
+plt.ylabel('平均收益率(%)')
+plt.xticks(range(len(days)), ['事件日', '1天后', '2天后', '3天后'])
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('analysis/eventStudy/delayed_react/category_direction_delayed_returns.png')
+plt.close()
+
+# 分析情感得分与延迟效应的关系
+plt.figure(figsize=(12, 6))
+for day in ['day_1_return', 'day_2_return', 'day_3_return']:
+    sns.regplot(x='sentiment_score', y=day, data=delayed_df, 
+                label=day.replace('_return', ''), scatter=False)
+
+plt.title('情感得分与延迟价格反应的关系')
+plt.xlabel('情感得分')
+plt.ylabel('延迟收益率(%)')
+plt.legend()
+plt.grid(True)
+plt.savefig('analysis/eventStudy/delayed_react/sentiment_delayed_returns.png')
+plt.close()
+
+# 输出统计结果
+print("\n各类别和价格方向组合的平均延迟效应:")
+for cat in categories:
+    cat_data = delayed_df[delayed_df['category_direction'] == cat]
+    print(f"\n{cat}组合:")
+    for day in days:
+        mean_return = cat_data[day].mean()
+        print(f"{day}: {mean_return:.2f}%")
+
+# 计算相关系数
+print("\n情感得分与延迟收益的相关系数:")
+for day in ['day_1_return', 'day_2_return', 'day_3_return']:
+    corr = delayed_df['sentiment_score'].corr(delayed_df[day])
+    print(f"{day}: {corr:.3f}")

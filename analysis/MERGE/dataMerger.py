@@ -1,3 +1,4 @@
+# data_merger.py
 import pandas as pd
 import numpy as np
 from datetime import timedelta
@@ -27,7 +28,7 @@ def load_and_clean_data(price_path, news_path):
         news_df = news_df.drop_duplicates(['date', 'title'])
         
         # 确保必要的列存在
-        required_columns = ['date', 'sentiment', 'title']
+        required_columns = ['date', 'sentiment', 'source', 'text', 'title', 'url']
         if not all(col in news_df.columns for col in required_columns):
             missing_cols = [col for col in required_columns if col not in news_df.columns]
             print(f"新闻数据缺少必要的列: {missing_cols}")
@@ -35,10 +36,8 @@ def load_and_clean_data(price_path, news_path):
         
         # 解析 sentiment 列
         news_df['sentiment'] = news_df['sentiment'].apply(ast.literal_eval)  # 将字符串转换为字典
-        news_df['negative'] = news_df['sentiment'].apply(lambda x: 1 if x['class'] == 'negative' else 0)
-        news_df['neutral'] = news_df['sentiment'].apply(lambda x: 1 if x['class'] == 'neutral' else 0)
-        news_df['positive'] = news_df['sentiment'].apply(lambda x: 1 if x['class'] == 'positive' else 0)
         news_df['sentiment_score'] = news_df['sentiment'].apply(lambda x: x['polarity'])  # 提取极性分数
+        news_df['event_type'] = news_df['sentiment'].apply(lambda x: x['class'])  # 提取事件类型
         
         # 清理 sentiment_score
         news_df['sentiment_score'] = pd.to_numeric(news_df['sentiment_score'], errors='coerce')
@@ -52,7 +51,7 @@ def load_and_clean_data(price_path, news_path):
 
 def merge_datasets(price_df, news_df):
     """
-    合并数据集，保留 date, price, change_percent, sentiment_score, title 和情感指标
+    合并数据集，处理缺失数据，并保留 change_percent 列
     """
     if price_df is None or news_df is None:
         print("价格数据或新闻数据为空，无法合并")
@@ -63,15 +62,35 @@ def merge_datasets(price_df, news_df):
         price_df['date'] = pd.to_datetime(price_df['date']).dt.normalize()
         news_df['date'] = pd.to_datetime(news_df['date']).dt.normalize()
         
+        # 创建完整的日期范围
+        date_range = pd.date_range(
+            start=min(price_df['date'].min(), news_df['date'].min()),
+            end=max(price_df['date'].max(), news_df['date'].max())
+        )
+        
+        # 填充价格数据
+        price_filled = price_df.set_index('date').reindex(date_range).reset_index()
+        price_filled = price_filled.rename(columns={'index': 'date'})
+        price_filled['price'] = price_filled['price'].ffill().bfill()
+        price_filled['change_percent'] = price_filled['change_percent'].ffill().bfill()  # 填充 change_percent
+        
+        # 按日聚合新闻数据,只保留需要的列
+        news_agg = news_df.groupby('date').agg({
+            'title': 'count',
+            'sentiment_score': 'mean'
+        }).reset_index()
+        
+        news_agg.columns = ['date', 'news_count', 'sentiment_avg']
+        
         # 合并数据
-        merged = pd.merge(news_df, price_df, on='date', how='left')
+        merged = pd.merge(price_filled, news_agg, on='date', how='left')
         
         # 填充缺失值
-        merged['price'] = merged['price'].fillna(method='ffill')
-        merged['change_percent'] = merged['change_percent'].fillna(0)  # 填充 change_percent
+        merged['news_count'] = merged['news_count'].fillna(0)
+        merged['sentiment_avg'] = merged['sentiment_avg'].fillna(0)
         
         # 只保留需要的列
-        columns_to_keep = ['date', 'price', 'change_percent', 'sentiment_score', 'title', 'negative', 'neutral', 'positive']
+        columns_to_keep = ['date', 'price', 'change_percent', 'news_count', 'sentiment_avg']
         merged = merged[columns_to_keep]
         
         return merged
@@ -83,9 +102,9 @@ def merge_datasets(price_df, news_df):
 if __name__ == "__main__":
     try:
         # 参数配置
-        PRICE_PATH = "price/mixture/cmc10_weighted_index.csv"
-        NEWS_PATH = "news/cryptonewsResearch.csv"
-        OUTPUT_PATH = "analysis/merged_DetailData.csv"
+        PRICE_PATH = "price\\mixture\\cmc10_weighted_index.csv"
+        NEWS_PATH = "news\classified_data.csv"
+        OUTPUT_PATH = "analysis\\merged_data.csv"
         
         # 执行流程
         print("开始加载数据...")
